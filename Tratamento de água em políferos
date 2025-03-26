@@ -1,1 +1,161 @@
+Descrição do Projeto: Máquina de Tratamento de Água com Polímeros Controlada por Arduino
+O projeto consiste em um sistema automatizado para tratamento de água usando polímeros floculantes. 
+A máquina será responsável por dosar o polímero, agitar a solução, permitir a sedimentação das impurezas e, finalmente, drenar os resíduos, garantindo a purificação da água.
 
+//CÓDIGO DO RELÓGIO E DA MÁQUINA 
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <LiquidCrystal.h>
+#include <RTClib.h>
+
+// Configuração do RTC DS1307
+RTC_DS1307 rtc;
+
+// Configuração do LCD I2C e LCD padrão
+LiquidCrystal_I2C lcd_i2c(0x27, 16, 2);
+const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+// Definição de pinos
+#define SENSOR_TURBIDEZ A0
+#define BOMBA_POLIMERO 9
+#define AGITADOR 10
+#define BOMBA_ESCOAMENTO 11
+#define RELE 7
+
+// Variáveis de horário
+int horaLigar = -1, minutoLigar = -1;
+int horaDesligar = -1, minutoDesligar = -1;
+
+// Dias ativos (Segunda a Sexta)
+bool diasAtivos[7] = {false, true, true, true, true, true, false};
+
+// Estados da configuração
+bool configurandoLigar = true;
+bool configurandoDesligar = false;
+
+void setup() {
+    Serial.begin(9600);
+    
+    // Inicializa LCDs
+    lcd.begin(16, 2);
+    lcd_i2c.begin();
+    lcd_i2c.backlight();
+
+    // Configuração dos pinos
+    pinMode(SENSOR_TURBIDEZ, INPUT);
+    pinMode(BOMBA_POLIMERO, OUTPUT);
+    pinMode(AGITADOR, OUTPUT);
+    pinMode(BOMBA_ESCOAMENTO, OUTPUT);
+    pinMode(RELE, OUTPUT);
+
+    digitalWrite(RELE, HIGH); // Relé começa desligado
+
+    // Inicializa RTC
+    if (!rtc.begin()) {
+        Serial.println("RTC não encontrado!");
+        lcd.setCursor(0, 1);
+        lcd.print("RTC nao encontrado!");
+        while (1);
+    }
+
+    if (!rtc.isrunning()) {
+        Serial.println("RTC sem energia, ajustando...");
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    }
+
+    lcd.setCursor(0, 1);
+    lcd.print("Aguardando...");
+    Serial.println("Digite o horario para LIGAR (HH MM):");
+}
+
+void loop() {
+    // Verifica entrada serial para configurar horários
+    if (Serial.available() > 0) {
+        if (configurandoLigar) {
+            horaLigar = Serial.parseInt();
+            minutoLigar = Serial.parseInt();
+            Serial.print("Sistema ligará às ");
+            Serial.print(horaLigar);
+            Serial.print(":");
+            Serial.println(minutoLigar);
+            configurandoLigar = false;
+            configurandoDesligar = true;
+            Serial.println("Digite o horário para DESLIGAR (HH MM):");
+        } else if (configurandoDesligar) {
+            horaDesligar = Serial.parseInt();
+            minutoDesligar = Serial.parseInt();
+            Serial.print("Sistema desligará às ");
+            Serial.print(horaDesligar);
+            Serial.print(":");
+            Serial.println(minutoDesligar);
+            configurandoDesligar = false;
+        }
+    }
+
+    // Obtém a data e hora atual do RTC
+    DateTime now = rtc.now();
+    int diaDaSemana = now.dayOfTheWeek();
+    bool diaAtivo = diasAtivos[diaDaSemana];
+
+    // Exibe horário atual no LCD
+    lcd.setCursor(0, 0);
+    lcd.print("Hora: ");
+    lcd.print(now.hour());
+    lcd.print(":");
+    if (now.minute() < 10) lcd.print("0");
+    lcd.print(now.minute());
+
+    // Leitura da turbidez
+    int turbidez = analogRead(SENSOR_TURBIDEZ);
+    lcd_i2c.setCursor(0, 0);
+    lcd_i2c.print("Turbidez: ");
+    lcd_i2c.print(turbidez);
+
+    Serial.print("Hora atual: ");
+    Serial.print(now.hour());
+    Serial.print(":");
+    Serial.print(now.minute());
+    Serial.print(":");
+    Serial.println(now.second());
+
+    Serial.print("Turbidez: ");
+    Serial.println(turbidez);
+
+    // Controle do sistema baseado no tempo e qualidade da água
+    if (horaLigar != -1 && minutoLigar != -1 && horaDesligar != -1 && minutoDesligar != -1) {
+        if (diaAtivo && now.hour() == horaLigar && now.minute() >= minutoLigar) {
+            digitalWrite(RELE, LOW); // Liga o sistema
+            lcd.setCursor(0, 1);
+            lcd.print("Sistema LIGADO");
+
+            // Verifica turbidez e inicia processo se necessário
+            if (turbidez > 600) {
+                digitalWrite(BOMBA_POLIMERO, HIGH);
+                delay(5000);  // Injeta polímero por 5s
+                digitalWrite(BOMBA_POLIMERO, LOW);
+
+                digitalWrite(AGITADOR, HIGH);
+                delay(10000);  // Mistura por 10s
+                digitalWrite(AGITADOR, LOW);
+
+                delay(30000);  // Aguarda sedimentação
+
+                digitalWrite(BOMBA_ESCOAMENTO, HIGH);
+                delay(5000);  // Remove impurezas por 5s
+                digitalWrite(BOMBA_ESCOAMENTO, LOW);
+            }
+        }
+
+        if (now.hour() == horaDesligar && now.minute() >= minutoDesligar) {
+            digitalWrite(RELE, HIGH); // Desliga o sistema
+            lcd.setCursor(0, 1);
+            lcd.print("Sistema DESLIGADO");
+        }
+    } else {
+        Serial.println("Horários ainda não definidos.");
+    }
+
+    delay(5000);
+}
